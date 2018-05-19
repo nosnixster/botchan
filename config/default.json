@@ -1,0 +1,15 @@
+{
+  "twitch-auth": {
+    "token": "",
+    "twitch_api": ""
+  },
+  "twitch-webhook": {
+    "port": 8080,
+    "lease_seconds": 259200,
+    "callbackurl": ""
+  },
+  "twitch": {
+    "live-streamers": [],
+    "follow-to-streamers": []
+  }
+}
