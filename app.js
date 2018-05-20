@@ -6,6 +6,7 @@ var logger = require('morgan');
 const request = require("request-promise");
 const TwitchWebhook = require('twitch-webhook');
 var config = require('config');
+const Discord = require("discord.js");
 
 var indexRouter = require('./routes/index');
 var usersRouter = require('./routes/users');
@@ -22,43 +23,47 @@ const twitchWebhook = new TwitchWebhook({
   }
 });
 
-function getTwitchUserByName(name, callback) {
+function getTwitchUserByName(name) {
   var options = {
     method: 'GET',
-    url: `https://api.twitch.tv/kraken/users?login=${name}`,
+    url: `https://api.twitch.tv/helix/users?login=${name}`,
     headers: {
-      'Accept': 'application/vnd.twitchtv.v5+json',
       'Client-ID': config.get('twitch-auth.twitch_api')
     }
   }
-
-  request(options, function(error, response, body) {
-    callback(JSON.parse(body));
-  });
+  return request(options);
 }
 
-function getTwitchUserByID(id, callback) {
+function getTwitchUserByID(id) {
   var options = {
     method: 'GET',
-    url: `https://api.twitch.tv/kraken/users?id=${id}`,
+    url: `https://api.twitch.tv/helix/users?id=${id}`,
     headers: {
-      'Accept': 'application/vnd.twitchtv.v5+json',
       'Client-ID': config.get('twitch-auth.twitch_api')
     }
   }
+  return request(options);
+}
 
-  request(options, function(error, response, body) {
-    callback(JSON.parse(body));
-  });
+function getTwitchGameByID(id) {
+  var options = {
+    method: 'GET',
+    url: `https://api.twitch.tv/helix/games?id=${id}`,
+    headers: {
+      'Client-ID': config.get('twitch-auth.twitch_api')
+    }
+  }
+  return request(options);
 }
 
 function subscribeTwitchLive() {
   let livestreamers = config.get('twitch.live-streamers');
   for (var i = 0; i < livestreamers.length; i++) {
     console.log(`Registering live webhook for ${livestreamers[i]}`)
-    getTwitchUserByName(livestreamers[i], function(jsonResponse) {
+    getTwitchUserByName(livestreamers[i]).then(function(jsonResponse) {
       //TODO error check
-      subscribeTwitchLiveWebhook(jsonResponse.users[0]._id);
+      jsonResponse = JSON.parse(jsonResponse);
+      subscribeTwitchLiveWebhook(jsonResponse.data[0].id);
     })
   }
 }
@@ -82,41 +87,75 @@ twitchWebhook.on('streams', ({
     // topic data, timestamps are automatically converted to Date
   console.log(event)
   if (event.data.length != 0) {
-    getTwitchUserByID(event.data[0].user_id, function(user) {
-      console.log(user);
-      //user = JSON.parse(user);
+    var promises = [getTwitchUserByID(event.data[0].user_id),
+      getTwitchGameByID(event.data[0].game_id)
+    ];
+    Promise.all(promises).then(function() {
+      sendDiscordEmbed(event, JSON.parse(arguments[0][0]), JSON.parse(
+        arguments[0][1]));
     })
   }
 });
 
-function sendDiscordEmbed(channel, embed) {
+function sendDiscordEmbed(event, user, game) {
   var rightNow = new Date();
   var x = rightNow.toISOString();
   //console.log(jsonResponse.stream);
   let embed = new Discord.RichEmbed()
     //.setAuthor(message.author.usernam)
-    .setAuthor(user.users[0].display_name,
-      user.users[0].channel.logo)
+    .setAuthor(user.data[0].display_name,
+      user.data[0].logo)
     //.setDescription(jsonResponse.stream.channel.display_name + " is streaming: ")
     .setColor("#9B59B6")
     //TODO get game
-    .setDescription("**Playing**: " + "")
+    .setDescription(`**Playing**: ${game.data[0].name}`)
     .setTitle(event.data[0].title)
-    .setURL(`https://twitch.tv/${user.users[0].name}`)
-    .setImage(event.data[0].thumbnail_url)
+    .setURL(`https://twitch.tv/${user.data[0].login}`)
+    .setImage(event.data[0].thumbnail_url.replace("{width}", "400").replace(
+      "{height}", "225"))
     .setTimestamp(x)
 
-  if (spam) {
-    let channel = channel_spam;
-  } else {
-    let channel = channel_strims;
-  }
-
   //channel_strims.send("Now Live: " + jsonResponse.stream.channel.display_name +"! @here");
-  channel_spam.send(embed);
+  let channels = config.get('announcements.discord.server.channels');
+  for (let i = 0; i < channels.length; i++) {
+    bot.guilds.find('id', config.get('announcements.discord.server.id')).channels
+      .find('name', channels[i]).send(
+        embed);
+  }
 }
 
-subscribeTwitchLive();
+const bot = new Discord.Client({
+  disableEveryone: false
+});
+
+bot.on("ready", async() => {
+  subscribeTwitchLive();
+  bot.user.setUsername(config.get('discord.bot.username'));
+});
+
+bot.on("message", async message => {
+  //TODO DATABASE
+  var prefix = "!";
+
+  if (message.author.bot) return;
+  if (message.channel.type === "dm") return;
+
+  let messageArray = message.content.split(" ");
+  let command = messageArray[0];
+
+  if (!command.startsWith(prefix)) return;
+
+  switch (command) {
+    case `${prefix}ping`:
+      message.channel.send(`pong`);
+      break;
+  }
+});
+
+
+bot.login(config.get('discord.bot.token')).then((token) => {
+
+}).catch(console.error);
 
 var app = express();
 
@@ -161,13 +200,13 @@ twitchWebhook.on('unsubscibe', (obj) => {
 process.on('SIGINT', () => {
   // unsubscribe from all topics
   twitchWebhook.unsubscribe('*')
-
-  // or unsubscribe from each one individually
-  twitchWebhook.unsubscribe('users/follows', {
-    first: 1,
-    to_id: 12826
-  })
-
+    /*
+      // or unsubscribe from each one individually
+      twitchWebhook.unsubscribe('users/follows', {
+        first: 1,
+        to_id: 12826
+      })
+    */
   process.exit(0)
 })
 
